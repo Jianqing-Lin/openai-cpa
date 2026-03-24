@@ -917,9 +917,11 @@ def _normalize_cpa_auth_files_url(api_url: str) -> str:
     if lower_url.endswith("/v0"): return f"{normalized}/management/auth-files"
     return f"{normalized}/v0/management/auth-files"
 
-def upload_to_cpa_integrated(token_data: dict, api_url: str, api_token: str) -> Tuple[bool, str]:
+def upload_to_cpa_integrated(token_data: dict, api_url: str, api_token: str, custom_filename: str = None) -> Tuple[bool, str]:
     upload_url = _normalize_cpa_auth_files_url(api_url)
-    filename = f"{token_data['email']}.json"
+    
+    filename = custom_filename if custom_filename else f"{token_data.get('email', 'unknown')}.json"
+    
     file_content = json.dumps(token_data, ensure_ascii=False, indent=2).encode("utf-8")
     try:
         mime = CurlMime()
@@ -1017,7 +1019,43 @@ def _extract_cliproxy_failure_reason(payload: Any, min_remaining_weekly_percent:
         if keyword in data_str: return _format_known_cliproxy_error(keyword)
 
     return None
-# ----------------------------------------
+
+def refresh_oauth_token(refresh_token: str, proxies: Any = None) -> Tuple[bool, dict]:
+    """使用 refresh_token 刷新获取新的 access_token 等凭证"""
+    if not refresh_token:
+        return False, {"error": "无 refresh_token"}
+    try:
+        resp = requests.post(
+            TOKEN_URL,
+            data={
+                "client_id": CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "redirect_uri": DEFAULT_REDIRECT_URI
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json"
+            },
+            proxies=proxies,
+            verify=_ssl_verify(),
+            timeout=30,
+            impersonate="chrome110"
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            now = int(time.time())
+            expires_in = _to_int(data.get("expires_in", 3600))
+            return True, {
+                "access_token": data.get("access_token"),
+                "refresh_token": data.get("refresh_token", refresh_token),
+                "id_token": data.get("id_token"),
+                "last_refresh": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+                "expired": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now + max(expires_in, 0)))
+            }
+        return False, {"error": f"HTTP {resp.status_code}: {resp.text}"}
+    except Exception as e:
+        return False, {"error": str(e)}
 
 def test_cliproxy_auth_file(item: dict, api_url: str, api_token: str) -> Tuple[bool, str]:
     auth_index = item.get("auth_index")
@@ -1055,7 +1093,7 @@ async def cpa_main_loop(args):
     """CPA 智能仓管模式 (测活、清理、补货、上传一体化)"""
     print("=" * 60)
     print(f"   目标库存阈值: {MIN_ACCOUNTS_THRESHOLD} | 单次补发量: {BATCH_REG_COUNT}")
-    print(f"   周限额剔除规则: 剩余低于 {MIN_REMAINING_WEEKLY_PERCENT}%" if MIN_REMAINING_WEEKLY_PERCENT > 0 else "  ⚖️  周限额剔除规则: 完全耗尽才剔除")
+    print(f"   周限额剔除规则: 剩余低于 {MIN_REMAINING_WEEKLY_PERCENT}%" if MIN_REMAINING_WEEKLY_PERCENT > 0 else "   周限额剔除规则: 完全耗尽才剔除")
     print("=" * 60)
     
     loop = asyncio.get_running_loop()
@@ -1079,13 +1117,72 @@ async def cpa_main_loop(args):
                     valid_count += 1
                     print(f"[{ts()}] [INFO] 测活 [{i}/{len(codex_files)}]: {name} 状态健康")
                 else:
-                    print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {name} 失效({msg})，正在物理剔除...")
-                    requests.delete(
-                        _normalize_cpa_auth_files_url(CPA_API_URL), 
-                        headers={"Authorization": f"Bearer {CPA_API_TOKEN}"}, 
-                        params={"name": name}
-                    )
+                    print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {name} 失效，正在尝试刷新 Token 复活...")
+                    refresh_success = False
+                    
+                    is_runtime_only = item.get("runtime_only", False)
+                    source_type = item.get("source", "")
+                    
+                    if is_runtime_only or source_type == "memory":
+                        print(f"[{ts()}] [WARNING] {name} 属于纯内存凭据，跳过抢救。")
+                        full_item_data = {}
+                    else:
+                        try:
+                            base_auth_url = _normalize_cpa_auth_files_url(CPA_API_URL)
+                            download_url = f"{base_auth_url}/download"
+                            content_resp = requests.get(
+                                download_url, 
+                                params={"name": name}, 
+                                headers={"Authorization": f"Bearer {CPA_API_TOKEN}"}, 
+                                timeout=20
+                            )
+                            if content_resp.status_code == 200:
+                                full_item_data = content_resp.json()
+                            else:
+                                print(f"[{ts()}] [ERROR] 获取 {name} 完整内容失败 (HTTP {content_resp.status_code})")
+                                full_item_data = {}
+                        except Exception as e:
+                            print(f"[{ts()}] [ERROR] 获取 {name} 完整内容异常: {e}")
+                            full_item_data = {}
 
+                    refresh_token = full_item_data.get("refresh_token")
+                    
+                    if refresh_token:
+                        proxies = {"http": args.proxy, "https": args.proxy} if args.proxy else None
+                        
+                        ok, new_tokens = refresh_oauth_token(refresh_token, proxies=proxies)
+                        
+                        if ok:
+                            print(f"[{ts()}] [INFO] {name} Token 刷新成功，正在同步至CPA...")
+                            full_item_data.update(new_tokens)
+                            if "email" not in full_item_data:
+                                full_item_data["email"] = name.replace(".json", "")
+                            
+                            up_ok, up_msg = upload_to_cpa_integrated(full_item_data, CPA_API_URL, CPA_API_TOKEN, custom_filename=name)
+                            if up_ok:
+                                time.sleep(3)
+                                
+                                is_ok2, msg2 = test_cliproxy_auth_file(item, CPA_API_URL, CPA_API_TOKEN)
+                                if is_ok2:
+                                    valid_count += 1
+                                    refresh_success = True
+                                    print(f"[{ts()}] [SUCCESS] 测活 [{i}/{len(codex_files)}]: {name} 刷新后复活成功！")
+                                else:
+                                    print(f"[{ts()}] [WARNING] {name} 刷新后二次测活依然失败({msg2})")
+                            else:
+                                print(f"[{ts()}] [ERROR] 刷新后覆盖CPA失败: {up_msg}")
+                        else:
+                            print(f"[{ts()}] [WARNING] {name} Token 刷新请求被拒绝: {new_tokens.get('error', '未知错误')}")
+                    else:
+                        print(f"[{ts()}] [WARNING] {name} 未找到有效数据，无法抢救")
+                    
+                    if not refresh_success:
+                        print(f"[{ts()}] [WARNING] 测活 [{i}/{len(codex_files)}]: 凭证 {name} 彻底死亡，执行物理剔除...")
+                        requests.delete(
+                            _normalize_cpa_auth_files_url(CPA_API_URL), 
+                            headers={"Authorization": f"Bearer {CPA_API_TOKEN}"}, 
+                            params={"name": name}
+                        )
             print(f"[{ts()}] [INFO] 巡检结束，当前仓库有效数: {valid_count}")
 
             if valid_count < MIN_ACCOUNTS_THRESHOLD:
