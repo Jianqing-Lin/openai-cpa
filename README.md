@@ -19,24 +19,25 @@ It also supports **random multi-level subdomain generation**, designed to work t
 > Use only in systems and environments you own or are explicitly authorized to test.
 > Make sure your use complies with applicable laws, platform rules, and service terms.
 
+## 🚀 Supported Environments
+* **Windows**: Native Support (**Python 3.12.6 or Python 3.12** recommended).
+* **Linux**: Native Support (**AMD64** & **ARM64**).
+* **macOS**: Native Support (**Apple Silicon M1/M2/M3/M4**).
+* **Docker**: **Full Platform Support (Highly Recommended)**.
+* Multi-arch images provided for seamless deployment across all cloud and local environments.
+
+## ⚠ Important Runtime Notes
+* **Native macOS / Linux**: You **MUST** use **Python 3.11** for native execution to ensure compatibility with the core engine.
+* **Native Windows**: Please use **Python 3.12.6 or Python 3.12** to match the core engine requirements.
+* **Docker Deployment**: This is the **preferred method**. The image comes pre-configured with the optimized environment, offering a true "out-of-the-box" experience without worrying about Python versions.
 
 ## Environment Setup
-[!IMPORTANT]
-Supported OS: Windows (Python 3.12.6 or Python 3.12) and Linux/Docker.
-﻿
-Note: macOS is currently NOT natively supported due to binary dependencies (.pyd and .so files).
 
 Install Python Dependencies Install the required base libraries using the requirements.txt file in the root directory:
 
 ```bash
 pip install -r requirements.txt
 ```
-After installing the dependencies, you need to continue executing the following commands
-
-```bash
-playwright install --with-deps chromium
-```
-
 ## Web Console Preview
 
 <details>
