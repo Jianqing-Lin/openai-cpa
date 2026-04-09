@@ -659,11 +659,35 @@ async def stream_logs(request: Request, token: str = Query(None)):
 
 @app.get("/")
 async def get_dashboard():
+    version = "1.0.0"
+    js_path = os.path.join(os.path.dirname(__file__), "static", "js", "app.js")
+    try:
+        if os.path.exists(js_path):
+            with open(js_path, "r", encoding="utf-8") as f:
+                js_content = f.read()
+                match = re.search(r"appVersion:\s*['\"]([^'\"]+)['\"]", js_content)
+                if match:
+                    version = match.group(1)
+    except Exception:
+        pass
+
     html_path = os.path.join(os.path.dirname(__file__), "index.html")
     if not os.path.exists(html_path):
         return HTMLResponse(content="<h1>找不到 index.html</h1>", status_code=404)
+
     with open(html_path, "r", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
+        html_content = f.read()
+
+    final_content = html_content.replace("__VER__", version)
+
+    return HTMLResponse(
+        content=final_content,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
 
 # 余额查询接口示例
 @app.get('/api/sms/balance')
