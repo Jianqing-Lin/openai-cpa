@@ -407,7 +407,6 @@ def reload_all_configs():
             PROXY_QUEUE.put(p)
     else:
         PROXY_QUEUE.put(DEFAULT_PROXY if DEFAULT_PROXY else None)
-
     _luckmail        = _c.get("luckmail", {})
     LUCKMAIL_API_KEY = _luckmail.get("api_key", "")
     LUCKMAIL_PREFERRED_DOMAIN = _luckmail.get("preferred_domain", "")

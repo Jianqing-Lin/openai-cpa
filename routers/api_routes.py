@@ -181,8 +181,7 @@ async def start_task(token: str = Depends(verify_token)):
 
     default_proxy = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
     args = DummyArgs(proxy=default_proxy if default_proxy else None)
-    core_engine.run_stats.update({"success": 0, "failed": 0, "retries": 0, "start_time": time.time()})
-
+    core_engine.run_stats.update({"success": 0, "failed": 0, "retries": 0, "pwd_blocked": 0, "phone_verify": 0, "start_time": time.time()})
     if getattr(core_engine.cfg, 'ENABLE_CPA_MODE', False):
         core_engine.run_stats["target"] = 0
         engine.start_cpa(args)
@@ -223,7 +222,13 @@ async def stop_task(token: str = Depends(verify_token)):
 async def get_stats(token: str = Depends(verify_token)):
     stats = core_engine.run_stats
     is_running = engine.is_running()
-    elapsed = round(time.time() - stats["start_time"], 1) if (is_running and stats["start_time"] > 0) else 0
+
+    if is_running:
+        elapsed = round(time.time() - stats["start_time"], 1) if stats.get("start_time", 0) > 0 else 0
+        stats["_frozen_elapsed"] = elapsed
+    else:
+        elapsed = stats.get("_frozen_elapsed", 0)
+
     total_attempts = stats["success"] + stats["failed"]
     success_rate = round((stats["success"] / total_attempts * 100), 2) if total_attempts > 0 else 0.0
     avg_time = round(elapsed / stats["success"], 1) if stats["success"] > 0 else 0.0
